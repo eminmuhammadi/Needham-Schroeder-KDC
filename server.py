@@ -1,6 +1,9 @@
 """
 Needham-Schroeder
+@url https://en.wikipedia.org/wiki/Needham–Schroeder_protocol
+
 KDC
+@url https://github.com/eminmuhammadi/Needham-Schroeder-KDC
 """
 import socket
 import sys
@@ -8,20 +11,30 @@ import traceback
 from threading import Thread
 import library as lib
 
-#dictionary that keeps track of the keys for each user
-userKeys = dict()
-#dictionary that keeps track of the ids and connections of each user
-connections = dict()
-#used for giving users unique ids
-numberOfUsers = 0
-#relatively prime numbers picked
+"""
+Server in memory db
+"""
+# dictionary that keeps track of the keys for each user
+__USER_KEYS__ = dict()
+# dictionary that keeps track of the ids and __CONNECTIONS__ of each user
+__CONNECTIONS__ = dict()
+# used for giving users unique ids
+__NUMBER_OF_USERS__ = 0
+# Server hostname
+IP = "127.0.0.1"
+# Server port
+PORT = 5000  
+
+"""
+Protocol settings for DH
+"""
 PublicP = 23
 PublicG = 5
 
-def main():
-    host = "127.0.0.1"
-    port = 5000  
-
+"""
+KDC Server
+"""
+def main(ip, port):
     soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   
     # SO_REUSEADDR flag tells the kernel to reuse a local socket in TIME_WAIT state, 
@@ -29,25 +42,28 @@ def main():
     print("Socket created")
 
     try:
-        soc.bind((host, port))
+        soc.bind((ip, port))
     except:
         print("Bind failed. Error : " + str(sys.exc_info()))
         sys.exit()
 
-    soc.listen(2) # queue up to 5 requests
+    soc.listen(5) # queue up to 5 requests
     print("Socket now listening...")
 
-    # infinite loop-do not reset for every requests
+    """
+    Fix: infinite loop-do not reset for every requests
+    """
     while True:
         connection, address = soc.accept()
         ip, port = str(address[0]), str(address[1])
         
-        if connection.getpeername() not in connections.keys():
+        if connection.getpeername() not in __CONNECTIONS__.keys():
             #delegates a unique id for each joining user
-            global numberOfUsers 
-            numberOfUsers += 1
-            connections[connection.getpeername()] = str(numberOfUsers).zfill(8)
+            global __NUMBER_OF_USERS__ 
+            __NUMBER_OF_USERS__ += 1
+            __CONNECTIONS__[connection.getpeername()] = str(__NUMBER_OF_USERS__).zfill(8)
 
+        # Start threading
         try:
             Thread(target=client_thread, args=(connection, ip, port)).start()
         except:
@@ -55,57 +71,76 @@ def main():
             traceback.print_exc()
 
         #printing which user connected
-        user = connections[connection.getpeername()]
-        print("\nUser " + str(user) + " connected with " + ip + " on port " + port)
+        user = __CONNECTIONS__[connection.getpeername()]
+        print("\nUser {} connected with {} on port {}".format(str(user), ip, port))
 
+"""
+Client Thread
+"""
 def client_thread(connection, ip, port, max_buffer_size = 5120):
     is_active = True
     #as soon as a user connects we initiated DH
     diffieHelman(connection)
 
+    """
+    Start Commands
+    """
     while is_active:
         client_input = receive_input(connection, max_buffer_size)
-        print("client input = ", client_input)
-        user = connections[connection.getpeername()]
-
+        user = __CONNECTIONS__[connection.getpeername()]
+        print("\nUser {} sent:".format(str(user)), client_input)
+        
+        # Quit command for exit
         if "quit" in client_input:
-            connections[connection.getpeername()] = None
+            __CONNECTIONS__[connection.getpeername()] = None
             connection.close()
-            print("User " + str(user) + " CLOSED their connection")
+            print("\nUser {} disconnected".format(str(user)))
+            # Thread lock
             is_active = False
 
+        # List command for listing users
         elif 'list' in client_input:
-            #user wants to see what other users they can connect to
+            # user wants to see what other users they can connect to
             output = ""
-            print(connection.getpeername())
-            if len(connections)==1:
+
+            # if there no users in the list, inform the user
+            if len(__CONNECTIONS__) == 1:
                 output = "You are the only user"
                 connection.send(output.encode())
+
+            # other users
             else:
-                for user in connections:
-                    if connections[connection.getpeername()] == None:
+                # iterate through the connections
+                for user in __CONNECTIONS__:
+                    if __CONNECTIONS__[connection.getpeername()] == None:
                         pass
                     if user != connection.getpeername():
-                        output += str(connections[user]) + ": "
+                        output += str(__CONNECTIONS__[user]) + ": "
                         output += str(user) + "\n"
                     else:
-                        output += str(connections[user]) + ": "
+                        output += str(__CONNECTIONS__[user]) + ": "
                         output += "YOU \n"
-                print("output: ",output)
                 connection.send(output.encode())
 
+        # Connect command for connecting to another user
         elif 'connect' in client_input:
             #we need to get the part after "connect|...."
             package = client_input.split("|")[1]
-            #find the message you want to send to A
-            messageToA = needhamSchroeder(package,connection)
-            #send to A and now the KDC's job is done
-            connection.send(messageToA.encode())
 
+            #find the message you want to send to A
+            messageToAlice = needhamSchroeder(package,connection)
+
+            #send to A and now the KDC's job is done
+            connection.send(messageToAlice.encode())
+
+        # Data receiving
         else:
-            print("User " + str(user) + " sent: {}".format(client_input))
+            print("User {} sent: {}".format(str(user), client_input))
             connection.sendall("-".encode("utf8"))
 
+"""
+Needham-Schroeder protocol implementation for KDC
+"""
 def needhamSchroeder(package, packageConnection):
     #receinving the contents from step 1
     #package is IDA||IDB||N1
@@ -118,8 +153,8 @@ def needhamSchroeder(package, packageConnection):
     IDbAsBinary = bin(IDaAsInt)[2:].zfill(8)
     nonce = package[16:]
 
-    AsKey = userKeys[IDa]
-    BsKey = userKeys[IDb]
+    AsKey = __USER_KEYS__[IDa]
+    BsKey = __USER_KEYS__[IDb]
 
     Ks = lib.generate.nonceGenerator()
     T = lib.generate.nonceGenerator()
@@ -133,12 +168,15 @@ def needhamSchroeder(package, packageConnection):
 
     return finalEncryptedMessage
 
-#method for initiating DH with each connected user
+"""
+Diffie-Hellman
+For initiating DH with each connected user
+"""
 def diffieHelman(client):
-    print("Initiating Diffie Hellman Connection with client")
+    print("Initiating Diffie Hellman Connection with client..")
 
-    # print(connections)
-    user = connections[client.getpeername()]
+    # print(__CONNECTIONS__)
+    user = __CONNECTIONS__[client.getpeername()]
 
     # client.send(user.encode())
     #send the public P and public G to the client
@@ -149,21 +187,21 @@ def diffieHelman(client):
     #call this a
     a = lib.generate.random10bit()
 
-    #calcualtes the first step
-    #A = g^a mod p
-    #send that to the client
+    # calcualtes the first step
+    # A = g^a mod p
+    # send that to the client
     A = (PublicG**a)%PublicP
     client.send(str(A).encode())
 
-    #receives the client calculation
+    # receives the client calculation
     B = int(client.recv(1024).decode('utf8'))
-    #do final calculation to get shared key
-    #S = B^a mod p
+    # do final calculation to get shared key
+    # S = B^a mod p
     S = (B**a)%PublicP
-    userKeys[user] = bin(S)[2:].zfill(10)
-    print("Established key = ", str(S))
+    __USER_KEYS__[user] = bin(S)[2:].zfill(10)
+    print("Established key = {}".format(__USER_KEYS__[user]))
 
-#wrapper for making sure incoming input is good
+# wrapper for making sure incoming input is good
 def receive_input(connection, max_buffer_size):
     client_input = connection.recv(max_buffer_size)
     client_input_size = sys.getsizeof(client_input)
@@ -171,8 +209,9 @@ def receive_input(connection, max_buffer_size):
     if client_input_size > max_buffer_size:
         print("The input size is greater than expected {}".format(client_input_size))
 
-    decoded_input = client_input.decode("utf8").rstrip()  # decode and strip end of line
+    # decode and strip end of line
+    decoded_input = client_input.decode("utf8").rstrip()  
     return decoded_input
 
 if __name__ == "__main__":
-    main()
+    main(IP, PORT)

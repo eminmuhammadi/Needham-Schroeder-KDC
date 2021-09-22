@@ -2,139 +2,167 @@ import socket
 import sys
 import library as lib
 
-#for the purpose of this assignment, both clients know these
-HOST = "127.0.0.1"
-PORT = 5010
+"""
+Alice's configurations
+"""
+# for the purpose of this assignment, both clients know these
+__MY_IP__   = "127.0.0.1"
+__MY_PORT__ = 5010
 
-KDC_key = None
-MyId = None
+__KDC_IP__   = "127.0.0.1"
+__KDC_PORT__ = 5000
 
-#method for printing the options for the client
+"""
+Bob's in memory db
+"""
+__KDC_KEY__ = None
+__MY_ID__   = None
+
+# method for printing the options for the client
 def printMenuOptions():
     print("Options:")
     print("\t Enter 'quit' to exit")
     print("\t Enter 'wait' wait for a connection")
 
-def main():
+"""
+Connection with KDC
+"""
+def main(host, port):
     soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Between Alice and Bob, Bob is the server
-    host = "127.0.0.1"
-    port = 5000
-
+    # Error handling
     try:
         soc.connect((host, port))
     except:
         print("Connection error")
         sys.exit()
 
-    #create the key and use it in function call
+    # create the key and use it in function call
     Key = lib.generate.random10bit()
-    diffieHelman(soc,Key)
+    diffieHelman(soc, Key)
 
-    #print the user options
-
+    """
+    Start Commands
+    """
     while True:
+        # print the user options
         printMenuOptions()
 
         message = input(" -> ")
+
+        # exit
         if message == "quit":
             break
 
-        #print the user options
         soc.send(message.encode("utf8"))
-        if soc.recv(5120).decode("utf8") == "-":
-            pass   # null operation
 
-
+        # showing the user available other users to Bob
         if message == "list":
             soc.send(message.encode("utf8"))
             userList = soc.recv(1024).decode('utf8')
             print(userList)
 
+        # wait for a connection
         if 'wait' in message:
-            mySocket = socket.socket()
-            mySocket.bind((HOST,PORT))
+            MySocket = socket.socket()
+            MySocket.bind((__MY_IP__, __MY_PORT__))
 
             print("Waiting for connection.....")
-            #listens for a user to connect
-            mySocket.listen(1)
-            #getting the user's connection info
-            conn, addr = mySocket.accept()
-            print ("Connection from: " + str(addr))
+            # listens for a user to connect
+            MySocket.listen(1)
 
-            #this means that Alice has initiated NS with the KDC and has now
-            #sent us an encrypted envelope with a session key
+            # getting the user's connection info
+            conn, addr = MySocket.accept()
+            print ("Connection from: {}".format(str(addr)))
+
+            # this means that Alice has initiated NS with the KDC and has now
+            # sent us an encrypted envelope with a session key
             package = conn.recv(1024).decode()
 
             #we decrypte it
-            decryptedPackage = lib.general.decrypt(package,KDC_key)
+            decryptedPackage = lib.general.decrypt(package, __KDC_KEY__)
             Ks = decryptedPackage[:10]
-            IDa = decryptedPackage[10:18]
-            nonce = decryptedPackage[18:]
-            #now we send back an an encrypted nonce
+            # IDa = decryptedPackage[10:18]
+            # nonce = decryptedPackage[18:]
+
+            # now we send back an an encrypted nonce
             newNonce = lib.generate.nonceGenerator()
-            encryptedNonce = lib.general.encrypt(newNonce,Ks)
+            encryptedNonce = lib.general.encrypt(newNonce, Ks)
             conn.send(encryptedNonce.encode())
 
             # we get an encrypted altered nonce from A
             incomingChangedNonce = conn.recv(1024).decode()
             changedIncomingNonce = lib.general.decrypt(incomingChangedNonce,Ks)
 
-            #if the difference is what we expect (pre-determined), then....
-            #we now have a secure encrypted communication!
-            if int(changedIncomingNonce,2) == int(newNonce,2) - 1:
+            # if the difference is what we expect (pre-determined), then....
+            # we now have a secure encrypted communication!
+            if int(changedIncomingNonce,2) == int(newNonce, 2) - 1:
                 conn.send("VERIFIED".encode())
+
+                """
+                Communication with Alice
+                """
                 while True:
                     data = conn.recv(1024).decode()
-                    decryptedMessage = lib.general.decrypt(data,Ks)
+
+                    # Decrypt the data
+                    decryptedMessage = lib.general.decrypt(data, Ks)
                     if not data:
-                            break
-                    print ("Decrypted Message = " + str(decryptedMessage))
-                    message = input("Enter the message you want to encrypt -> ")
-                    #encrypting the message using DES
-                    finalEncryptedMessage = lib.general.encrypt(message,Ks)
-                    #prints the pretty loading bar
-                    #sending the message
+                        break
+                    print("Alice said: {}".format(decryptedMessage))
+
+                    message = input("Enter the message to send Alice (will be encrypted after) -> ")
+
+                    # encrypting the message using DES
+                    finalEncryptedMessage = lib.general.encrypt(message, Ks)
+
+                    # prints the pretty loading bar
+                    # sending the message
                     conn.send(finalEncryptedMessage.encode())
+
+        if soc.recv(5120).decode("utf8") == "-":
+            pass   # null operation
 
     soc.send(b'--quit--')
 
-#method that runs that diffie helman exchange for the client
-def diffieHelman(kdc, PrivateKey):
-    # message = kdc.recv(1024).decode('utf8')
-    
-    #note b is the private key
-    #receive public G and P from server
+"""
+Diffie-Hellman implementation for Bob
+method that runs that diffie helman exchange for the client
+"""
+def diffieHelman(kdc, PrivateKey):    
+    # note b is the private key
+    # receive public G and P from server
     message = kdc.recv(1024).decode('utf8')
     message = message.split("|")
     publicP, publicG = int(message[1]),int(message[2])
-    global MyId
-    MyId = message[0]
 
-    #receives the first calculation
-    #call this X
+    global __MY_ID__
+    __MY_ID__ = message[0]
+
+    # receives the first calculation
+    # call this X
     A = int(kdc.recv(1024).decode('utf8'))
 
-    #generate 10 bit key for KDC
-    #call this a
-    #now it's time for the client to do their step
-    #B = g^b mod p
+    # generate 10 bit key for KDC
+    # call this a
+    # now it's time for the client to do their step
+    # B = g^b mod p
     b = lib.generate.random10bit()
     B = (publicG**b)%publicP
 
-    #now we send this to the server
+    # now we send this to the server
     kdc.send(str(B).encode())
 
-    #now we do the final calculation
-    #S = A^b mod p
+    # now we do the final calculation
+    # S = A^b mod p
     S = (A**b)%publicP
-    global KDC_key
-    KDC_key = bin(S)[2:].zfill(10)
-    #printing here is only for the sake of this assignment
-    #would not get done in real life
-    print("Established key = ", str(S))
+    global __KDC_KEY__
+    __KDC_KEY__ = bin(S)[2:].zfill(10)
+
+    # printing here is only for the sake of this assignment
+    # would not get done in real life
+    print("Established key = {}".format(str(S)))
 
 
 if __name__ == "__main__":
-    main()
+    main(__KDC_IP__, __KDC_PORT__)
